@@ -6,6 +6,7 @@ import time
 import datetime
 
 import numpy as np
+from numpy.matlib import repmat
 import random as rd 
 from selfData import *
 from joblib import Parallel, delayed
@@ -46,7 +47,7 @@ class coTriplet():
 		pass
 		# Initialize latent parameters
 		# self.core =
-		self.core = Tensor([self.UCore,self.ICore,self.TCore],rand_init=True)
+		self.core = np.random.rand(self.UCore,self.ICore,self.TCore)
 		self.ucore = np.random.rand(self.unique_u_num,self.UCore) 
 		self.icore = np.random.rand(self.unique_i_num,self.ICore) 
 		self.tcore = np.random.rand(self.unique_t_num,self.TCore)
@@ -76,7 +77,6 @@ class coTriplet():
 		wait()
 	def _update(self,InputData):
 		'''
-
 		'''
 		for itertime in xrange(self.max_iter):
 			for u in xrange(self.unique_u_num):
@@ -103,22 +103,24 @@ class coTriplet():
 		neg_tag = rd.sample(neg_tag,20)
 		return pos_tag,neg_tag
 	def _update_factors(self,pos_tag,neg_tag,u,i,z,y,v):
-		self.core.data = self._update_para_core(u,i,z,y,v)
+		self.core = self._update_para_core(u,i,z,y,v)
 		self.ucore[u,0:self.UCore] = self._update_para_user(u,i,z,y,v)
 		self.icore[i,0:self.ICore] = self._update_para_image(u,i,z,y,v)
 		# '''更新tag matrix的准备工作'''
 		q = self._cal_q(u,i)
-		for tp in pos_tag:
-			self.tcore[tp,0:self.TCore] = self._update_para_pos_tag(u,i,z,y,v,q,tp,neg_tag)
-		for tn in neg_tag:
-			self.tcore[tn,0:self.TCore] = self._update_para_neg_tag(u,i,z,y,v,q,tn,pos_tag)
+		self._updata_para_tag(u,i,z,y,v,q,pos_tag,neg_tag)
+
+		# for tp in pos_tag:
+		# 	self.tcore[tp,0:self.TCore] = self._update_para_pos_tag(u,i,z,y,v,q,tp,neg_tag)
+		# for tn in neg_tag:
+		# 	self.tcore[tn,0:self.TCore] = self._update_para_neg_tag(u,i,z,y,v,q,tn,pos_tag)
 	def _cal_y(self,u,i):
-		res = np.tensordot(self.core.data.reshape(self.UCore,self.ICore,self.TCore),self.ucore[u,0:self.UCore].T,(0,0))
+		res = np.tensordot(self.core,self.ucore[u,0:self.UCore].T,(0,0))
 		res = np.tensordot(res,self.icore[i,0:self.ICore].T,(0,0))
 		y = np.tensordot(res,self.tcore,(0,1))
 		return y
 	def _cal_v(self,y,pos_tag,neg_tag):
-		v = np.arange(self.TCore)
+		v = np.zeros(self.TCore)
 		for tp in pos_tag:
 			for tn in neg_tag:
 				s = 1/(1+np.exp(-y[tp]+y[tn]))
@@ -127,30 +129,37 @@ class coTriplet():
 					v[vtc] +=w*(self.tcore[tp,vtc]-self.tcore[tn,vtc])
 		return v
 	def _cal_q(self,u,i):
-		tmp = np.tensordot(self.core.data.reshape(self.UCore,self.ICore,self.TCore),self.ucore[u,0:self.UCore],(0,0))
+		tmp = np.tensordot(self.core,self.ucore[u,0:self.UCore],(0,0))
 		tmp = np.tensordot(tmp,self.icore[i,0:self.ICore],(0,0))
 		return tmp
-	def _update_para_core(self,u,i,z,y,v):
-		core_index = [(uu,ii,tt) for uu in range(self.UCore) for ii in range(self.ICore) for tt in range(self.TCore)  ]
-		
-		r = np.zeros(len(core_index))
-		for ind,index in enumerate(core_index):
-			r[ind]=self._solve_para_core(u,i,z,y,v,index)
-		return r
-	def _solve_para_core(self,u,i,z,y,v,index,alpha=0.1,gamma_c=0.1):
-		grad = z*self.ucore[u,index[0]]*self.icore[i,index[1]]*v[index[2]]
-		'''gradient descent'''
-		new = self.core[index[0],index[1],index[2]]+\
-					alpha * (grad-gamma_c *self.core[index[0],index[1],index[2]] )
-		return new
-	def _update_para_user(self,u,i,z,y,v):
-		tmp = np.tensordot(self.core.data.reshape(self.UCore,self.ICore,self.TCore),self.icore[i,0:self.ICore],(1,0))
-		tmp = z*np.tensordot(tmp,v,(1,0))
-		return tmp
-	def _update_para_image(self,u,i,z,y,v):
-		tmp = np.tensordot(self.core.data.reshape(self.UCore,self.ICore,self.TCore),self.ucore[u,0:self.UCore],(0,0))
-		tmp = z*np.tensordot(tmp,v,(1,0))
-		return tmp
+	def _update_para_core(self,u,i,z,y,v,alpha=0.1,gamma_c=0.1):
+		tmp = np.tensordot(self.ucore[u,0:self.UCore].reshape(1,self.UCore),self.icore[i,0:self.ICore].reshape(1,self.ICore),(0,0))
+		grad = np.tensordot(tmp.reshape(self.UCore,self.ICore,1),v.reshape(1,self.TCore),(2,0))
+		# gradient descent
+		res = self.core + alpha*(grad-gamma_c*self.core)
+		return res
+	def _update_para_user(self,u,i,z,y,v,alpha=0.1,gamma=0.1):
+		tmp = np.tensordot(self.core,self.icore[i,0:self.ICore],(1,0))
+		grad = z*np.tensordot(tmp,v,(1,0))
+		# gradient descent
+		res = self.ucore[u,0:self.UCore] + alpha*(grad-gamma*self.ucore[u,0:self.UCore])
+		return res
+	def _update_para_image(self,u,i,z,y,v,alpha=0.1,gamma=0.1):
+		tmp = np.tensordot(self.core,self.ucore[u,0:self.UCore],(0,0))
+		grad = z*np.tensordot(tmp,v,(1,0))
+		# gradient descent
+		res = self.icore[i,0:self.ICore] + alpha*(grad - gamma*self.icore[i,0:self.ICore])
+		return res
+	def _updata_para_tag(self,u,i,z,y,v,q,pos_tag,neg_tag,alpha=0.1,gamma=0.1):
+		diff = repmat(np.array(pos_tag).reshape(len(pos_tag),1),1,len(neg_tag))-repmat(np.array(neg_tag),len(pos_tag),1)
+		s = np.exp(diff)
+		w = s*(1-s)
+		grad_tp = -z * np.tensordot(np.tensordot(w,np.ones(len(neg_tag)),(1,0)).reshape(1,len(pos_tag)),np.array(q).reshape(1,self.TCore),(0,0))
+		grad_tn =  z * np.tensordot(np.tensordot(w,np.ones(len(pos_tag)),(0,0)).reshape(1,len(neg_tag)),np.array(q).reshape(1,self.TCore),(0,0))
+		self.tcore[pos_tag,0:self.TCore] = self.tcore[pos_tag,0:self.TCore] + alpha*(grad_tp - gamma * self.tcore[pos_tag,0:self.TCore])
+		self.tcore[neg_tag,0:self.TCore] = self.tcore[neg_tag,0:self.TCore] + alpha*(grad_tn - gamma * self.tcore[neg_tag,0:self.TCore])
+		del grad_tp
+		del grad_tn
 	def _update_para_pos_tag(self,u,i,z,y,v,q,tp,neg_tag):
 		res = np.zeros(self.TCore)
 		for index,val in enumerate(range(self.TCore)):
@@ -182,7 +191,3 @@ class coTriplet():
 
 	def _update_theta():
 		'''Update factor'''
-	
-
-
-
